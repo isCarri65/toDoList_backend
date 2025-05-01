@@ -1,97 +1,158 @@
+const Backlog = require("../models/Backlog");
 const Sprint = require("../models/Sprint");
+const Task = require("../models/Task");
+const { addTaskToBacklog } = require("./backlogController");
 const { getTaskById } = require("./taskController");
 
-exports.getAllSprints = async (req, res) => {
+exports.getAllSprints = async (req, res, next) => {
   try {
     const sprints = await Sprint.find().populate("tareas");
     res.json(sprints);
   } catch (err) {
-    res.status(500).json({ error: "Error al obtener sprints" });
+    next(err);
   }
 };
 
-exports.getSprintById = async (req, res) => {
+exports.getSprintById = async (req, res, next) => {
   const { id } = req.params;
   try {
-    const sprint = await Sprint.findById(id);
+    const sprint = await Sprint.findById(id).populate("tareas");
+    if (!sprint) {
+      const error = new Error(`El sprint con el id ${id} no fue encontrad0.`);
+      error.statusCode = 404; // Not Found
+      throw error;
+    }
     res.json(sprint);
   } catch (error) {
-    res.status(500).json({
-      error: "Error al buscar un sprint por su id",
-      detalle: error.message,
-    });
+    next(error);
   }
 };
 
-exports.createSprint = async (req, res) => {
+exports.createSprint = async (req, res, next) => {
+  const colorR =
+    "#" +
+    Math.floor(Math.random() * 16777215)
+      .toString(16)
+      .padStart(6, "0");
   try {
-    const newSprint = new Sprint(req.body);
+    const newSprint = new Sprint({ ...req.body, color: colorR });
     const savedSprint = await newSprint.save();
     res.status(201).json(savedSprint);
   } catch (err) {
-    res
-      .status(400)
-      .json({ error: "Error al crear sprint", detalle: err.message });
+    next(err);
   }
 };
-
-exports.updateSprint = async (req, res) => {
+exports.updateSprint = async (req, res, next) => {
   const { id } = req.params;
   const { nombre, fechaInicio, fechaCierre, tareas, color } = req.body;
-
+  const tareasParse = tareas.map((tarea) => {
+    tarea.id;
+  });
   try {
     const updatedSprint = await Sprint.findByIdAndUpdate(
       id,
-      { nombre, fechaInicio, fechaCierre, tareas, color },
+      { nombre, fechaInicio, fechaCierre, tareas: tareasParse, color },
       { new: true } // devuelve el documento actualizado
     );
 
     if (!updatedSprint) {
-      return res.status(404).json({ mensaje: "Tarea no encontrada" });
+      const error = new Error("El Sprint a actualizar no fue encontrada.");
+      error.statusCode = 404; // Not Found
+      throw error;
     }
     res.json(updatedSprint);
   } catch (error) {
-    res
-      .status(500)
-      .json({ mensaje: "Error al actualizar tarea", detalle: error.message });
+    next(error);
   }
 };
-exports.deleteSprint = async (req, res) => {
+exports.deleteSprint = async (req, res, next) => {
   const { id } = req.params;
   try {
     const deleted = await Sprint.findByIdAndDelete(id);
     if (!deleted) {
-      res.status(404).json({ message: "Error, sprint no encontrado" });
+      const error = new Error("El Sprint a eliminar no fue encontrada.");
+      error.statusCode = 404; // Not Found
+      throw error;
     }
-    res.json({ message: "Sprint Eliminado con exito" });
-  } catch (error) {
-    res.status(500).json({
-      message: "Error del sevidor a la hora de borrar el sprint",
-      detall: error.message,
+    res.status(200).json({
+      success: true,
+      message: "El sprint fue eliminado exitosamente.",
     });
+  } catch (error) {
+    next(error);
   }
 };
 
-exports.addTaskToSprint = async (req, res) => {
+exports.addTaskToSprint = async (req, res, next) => {
   const { id, taskId } = req.params;
   try {
     const taskExist = Task.findById(taskId);
-    if (!taskExist)
-      res
-        .status(404)
-        .json({ message: "Error, la tarea que se intenta agregar no existe" });
+    if (!taskExist) {
+      const error = new Error(
+        "La tarea no fue encontrada para agregarla al sprint."
+      );
+      error.statusCode = 404; // Not Found
+      throw error;
+    }
     const updatedSprint = await Sprint.findByIdAndUpdate(
       id,
       { $push: { tareas: taskId } },
       { new: true }
     );
     if (!updatedSprint) {
-      res.status(404).json({ message: "Sprint no encontrado por su id" });
+      const error = new Error("El Sprint a actualizar no fue encontrada.");
+      error.statusCode = 404; // Not Found
+      throw error;
     }
+
+    await Backlog.findOneAndUpdate({}, { $pull: { tareas: taskId } });
     res.json(updatedSprint);
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error al intentar agregar una tarea a un sprint" });
+    next(error);
+  }
+};
+
+exports.moveTaskToBacklog = async (req, res, next) => {
+  const { id, taskId } = req.params;
+  try {
+    const sprint = await Sprint.findById(id).populate("tareas");
+    if (!sprint) {
+      const error = new Error("Sprint no encontrado.");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const tareaExiste = sprint.tareas.some((t) => t._id.toString() === taskId);
+    if (!tareaExiste) {
+      const error = new Error("La tarea no se encuentra en el sprint.");
+      error.statusCode = 404;
+      throw error;
+    }
+    // Eliminar del sprint
+    sprint.tareas.pull(taskId);
+    await sprint.save();
+    // Cambiar el estado de la tarea a pendiente y agregarla al backlog
+
+    const result = await Task.updateOne(
+      { _id: taskId },
+      { $set: { estado: "pendiente" } }
+    );
+    if (result.acknowledged === false) {
+      const error = new Error("Error al actualizar el estado de la tarea.");
+      error.statusCode = 500;
+      throw error;
+    }
+    const result2 = await Backlog.updateOne(
+      {},
+      { $addToSet: { tareas: taskId } }
+    );
+    if (result2.acknowledged === false) {
+      const error = new Error("Error al agregar la tarea al backlog.");
+      error.statusCode = 500;
+      throw error;
+    }
+    res.json(sprint);
+  } catch (error) {
+    next(error);
   }
 };

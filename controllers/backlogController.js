@@ -1,48 +1,49 @@
 const Backlog = require("../models/Backlog");
+const Task = require("../models/Task");
 
-exports.getBacklog = async (req, res) => {
+exports.getBacklog = async (req, res, next) => {
   try {
-    const backlog = await Backlog.find().populate("tareas");
+    const backlog = await Backlog.findOne().populate("tareas");
     res.json(backlog);
   } catch (err) {
-    res.status(500).json({ error: "Error al obtener backlog" });
+    next(err);
   }
 };
 
-exports.createBacklog = async (req, res) => {
+exports.createBacklog = async (req, res, next) => {
   try {
     const newBacklog = new Backlog(req.body);
     const savedBacklog = await newBacklog.save();
     res.status(201).json(savedBacklog);
   } catch (err) {
-    res
-      .status(400)
-      .json({ error: "Error al crear backlog", detalle: err.message });
+    next(err);
   }
 };
 
-exports.addTaskToBacklog = async (req, res) => {
+exports.addTaskToBacklog = async (req, res, next) => {
   const { taskId } = req.params;
 
   try {
     const taskExist = await Task.findById(taskId);
-    if (!taskExist)
-      res
-        .status(404)
-        .json({ message: "Error, la tarea que se intenta agregar no existe" });
+    if (!taskExist) {
+      const error = new Error(
+        "No se encontró la tarea para agregar al backlog"
+      );
+      error.statusCode = 404; // Not Found
+      throw error;
+    }
     const updatedBacklog = await Backlog.findOneAndUpdate(
       {},
       { $push: { tareas: taskId } },
       { new: true }
     );
-    if (updatedBacklog) {
-      res.status(404).json({ message: "Error, backlog no encontrado" });
+    if (!updatedBacklog) {
+      const error = new Error("El backlog a actualizar no fue encontrado.");
+      error.statusCode = 404; // Not Found
+      throw error;
     }
     res.json(updatedBacklog);
   } catch (error) {
-    res.status(500).json({
-      error: "Error al agregar una tarea al backlog",
-      detalle: error.message,
-    });
+    next(error);
   }
 };

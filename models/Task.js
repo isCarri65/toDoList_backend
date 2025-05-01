@@ -17,4 +17,13 @@ const taskSchema = new mongoose.Schema({
   color: { type: String, required: true },
 });
 
+taskSchema.set("toJSON", {
+  virtuals: true,
+  versionKey: false,
+  transform: (_, ret) => {
+    ret.id = ret._id;
+    delete ret._id;
+  },
+});
+
 module.exports = mongoose.model("Task", taskSchema);
